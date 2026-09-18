@@ -115,17 +115,22 @@ async function derivePassword(password: string, salt: Uint8Array, iterations: nu
   return new Uint8Array(bits);
 }
 
+export const CURRENT_PBKDF2_ITERATIONS = 100_000;
+
 export async function hashPassword(password: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iterations = 120_000;
-  const hash = await derivePassword(password, salt, iterations);
-  return JSON.stringify({ salt: bytesToBase64(salt), hash: bytesToBase64(hash), iterations } satisfies PasswordRecord);
+  const hash = await derivePassword(password, salt, CURRENT_PBKDF2_ITERATIONS);
+  return JSON.stringify({ salt: bytesToBase64(salt), hash: bytesToBase64(hash), iterations: CURRENT_PBKDF2_ITERATIONS } satisfies PasswordRecord);
 }
 
 export async function verifyPassword(password: string, serialized: string): Promise<boolean> {
   try {
     const record = JSON.parse(serialized) as PasswordRecord;
     if (!record.salt || !record.hash || !Number.isInteger(record.iterations)) return false;
+    // Cloudflare Workers KV runtime caps PBKDF2 iterations at 100000.
+    // If a legacy hash used a higher count, verification cannot complete on
+    // the production runtime — treat it as failed (not crash-worthy).
+    if (record.iterations > CURRENT_PBKDF2_ITERATIONS) return false;
     const expected = base64ToBytes(record.hash);
     const actual = await derivePassword(password, base64ToBytes(record.salt), record.iterations);
     if (actual.length !== expected.length) return false;
